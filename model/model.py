@@ -1,3 +1,4 @@
+import os.path
 import re
 from statistics import mode
 
@@ -14,8 +15,17 @@ from utils.tools import Discretizer, Serializer
 
 
 class ChatTime:
-    def __init__(self, model_path, hist_len=None, pred_len=None,
-                 max_pred_len=16, num_samples=8, top_k=100, top_p=1.0, temperature=1.0):
+    def __init__(
+        self,
+        model_path,
+        hist_len=None,
+        pred_len=None,
+        max_pred_len=16,
+        num_samples=8,
+        top_k=100,
+        top_p=1.0,
+        temperature=1.0,
+    ):
         self.model_path = model_path
         self.hist_len = hist_len
         self.pred_len = pred_len
@@ -37,14 +47,18 @@ class ChatTime:
             device_map="auto",
         )
 
-        self.tokenizer = LlamaTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+        self.tokenizer = LlamaTokenizer.from_pretrained(
+            self.model_path, trust_remote_code=True
+        )
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "right"
         self.eos_token_id = self.tokenizer.eos_token_id
 
     def predict(self, hist_data, context=None):
         if self.hist_len is None or self.pred_len is None:
-            raise ValueError("hist_len and pred_len must be specified before prediction")
+            raise ValueError(
+                "hist_len and pred_len must be specified before prediction"
+            )
 
         series = hist_data
         prediction_list = []
@@ -53,7 +67,9 @@ class ChatTime:
         while remaining > 0:
             dispersed_series = self.discretizer.discretize(series)
             serialized_series = self.serializer.serialize(dispersed_series)
-            serialized_series = getPrompt(flag="prediction", context=context, input=serialized_series)
+            serialized_series = getPrompt(
+                flag="prediction", context=context, input=serialized_series
+            )
 
             pipe = pipeline(
                 task="text-generation",
@@ -72,14 +88,25 @@ class ChatTime:
 
             pred_list = []
             for sample in samples:
-                serialized_prediction = sample["generated_text"].split("### Response:\n")[1]
-                dispersed_prediction = self.serializer.inverse_serialize(serialized_prediction)
+                serialized_prediction = sample["generated_text"].split(
+                    "### Response:\n"
+                )[1]
+                dispersed_prediction = self.serializer.inverse_serialize(
+                    serialized_prediction
+                )
                 pred = self.discretizer.inverse_discretize(dispersed_prediction)
 
                 if len(pred) < min(remaining, self.max_pred_len):
-                    pred = np.concatenate([pred, np.full(min(remaining, self.max_pred_len) - len(pred), np.NaN)])
+                    pred = np.concatenate(
+                        [
+                            pred,
+                            np.full(
+                                min(remaining, self.max_pred_len) - len(pred), np.NaN
+                            ),
+                        ]
+                    )
 
-                pred_list.append(pred[:min(remaining, self.max_pred_len)])
+                pred_list.append(pred[: min(remaining, self.max_pred_len)])
 
             prediction = np.nanmedian(pred_list, axis=0)
             prediction_list.append(prediction)
@@ -97,8 +124,13 @@ class ChatTime:
     def analyze(self, question, series):
         dispersed_series = self.discretizer.discretize(series)
         serialized_series = self.serializer.serialize(dispersed_series)
-        serialized_series = getPrompt(flag="analysis", instruction=question, input=serialized_series)
-
+        prompt = f"""You are a time-series anomaly detection assistant.
+    ### Instruction:
+    {question}
+    ### Input:
+    {serialized_series}
+    ### Response:
+    """
         pipe = pipeline(
             task="text-generation",
             model=self.model,
@@ -111,14 +143,20 @@ class ChatTime:
             temperature=self.temperature,
             eos_token_id=self.eos_token_id,
         )
-        samples = pipe(serialized_series)
-
+        samples = pipe(prompt)
         response_list = []
         for sample in samples:
             response = sample["generated_text"].split("### Response:\n")[1].split('.')[0] + "."
-            response = re.findall(r"\([abc]\)", response)[0]
-            response_list.append(response)
 
+            matches = re.findall(r"\([abc]\)", response)
+            if matches:
+                response_list.append(matches[0])
+            else:
+                if "Anomaly" in response:
+                    response_list.append("(b)")
+                elif "Normal" in response:
+                    response_list.append("(a)")
+                else:
+                    response_list.append("(a)")
         response = mode(response_list)
-
         return response
