@@ -121,10 +121,20 @@ class ChatTime:
 
         return prediction
 
-    def analyze(self, question, series):
+    def analyze(self, question, series, task_type="anomaly_detection"):
         dispersed_series = self.discretizer.discretize(series)
         serialized_series = self.serializer.serialize(dispersed_series)
-        prompt = f"""You are a time-series anomaly detection assistant.
+
+        if task_type == "classification":
+            prompt = f"""You are a time-series classification assistant.
+    ### Instruction:
+    {question}
+    ### Input:
+    {serialized_series}
+    ### Response:
+    """
+        else:
+            prompt = f"""You are a time-series anomaly detection assistant.
     ### Instruction:
     {question}
     ### Input:
@@ -145,18 +155,36 @@ class ChatTime:
         )
         samples = pipe(prompt)
         response_list = []
-        for sample in samples:
-            response = sample["generated_text"].split("### Response:\n")[1].split('.')[0] + "."
 
-            matches = re.findall(r"\([abc]\)", response)
-            if matches:
-                response_list.append(matches[0])
-            else:
-                if "Anomaly" in response:
-                    response_list.append("(b)")
-                elif "Normal" in response:
-                    response_list.append("(a)")
+        if task_type == "classification":
+            for sample in samples:
+                response = sample["generated_text"].split("### Response:\n")[1]
+                activity_match = re.search(
+                    r"(Walking|Jogging|Sitting|Standing|Upstairs|Downstairs|No freeze|Freeze)",
+                    response,
+                    re.IGNORECASE,
+                )
+                if activity_match:
+                    response_list.append(activity_match.group(1))
                 else:
-                    response_list.append("(a)")
-        response = mode(response_list)
+                    response_list.append("")
+        else:
+            for sample in samples:
+                response = (
+                    sample["generated_text"].split("### Response:\n")[1].split(".")[0]
+                    + "."
+                )
+
+                matches = re.findall(r"\([abc]\)", response)
+                if matches:
+                    response_list.append(matches[0])
+                else:
+                    if "Anomaly" in response:
+                        response_list.append("(b)")
+                    elif "Normal" in response:
+                        response_list.append("(a)")
+                    else:
+                        response_list.append("(a)")
+
+        response = mode(response_list) if response_list else ""
         return response
